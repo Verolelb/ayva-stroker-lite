@@ -29,6 +29,19 @@
             @update="onUpdate('bpm', $event)"
           />
         </div>
+        
+        <!-- SLIDER AMPLITUDE (CORRIGÉ: PAS DE %) -->
+        <div class="limit">
+          <div class="axis">
+            Max Amplitude
+          </div>
+          <ayva-slider
+            ref="amplitudeSlider"
+            :options="amplitudeOptions"
+            storage-key="free-play-max-amplitude"
+            @update="onUpdate('max-amplitude', $event)"
+          />
+        </div>
 
         <div class="limit">
           <div class="axis" :disabled="disableAcceleration">
@@ -140,11 +153,6 @@
           </n-dropdown></span>
       </div>
       <div class="limits lil-gui children" style="padding-top: 0;">
-        <!-- <div class="info">
-          Select what strokes to include in free play mode, or click buttons to manually trigger a stroke
-          (manually triggering a stroke will transition out of free play mode).
-        </div> -->
-
         <div ref="tempestStrokeContainer" class="tempest-stroke-container">
           <div class="tempest-stroke">
             <div class="checkbox">
@@ -272,64 +280,51 @@ export default {
       twist: false,
 
       bpmOptions: {
-        range: {
-          min: 0,
-          max: 200,
-        },
+        range: { min: 0, max: 200 },
         start: [20, 60],
         padding: [10],
         step: 1,
         format: formatter(),
       },
+      // --- CORRECTION ICI : PAS DE FORMATAGE TEXTE ---
+      amplitudeOptions: {
+        range: { min: 10, max: 100 },
+        start: [100],
+        step: 1,
+        // format: ... SUPPRIMÉ POUR ÉVITER LE BUG NaN
+      },
+      // -----------------------------------------------
       accelerationOptions: {
-        range: {
-          min: 0,
-          max: 200,
-        },
+        range: { min: 0, max: 200 },
         start: [0, 20],
         step: 1,
         format: formatter(),
       },
       patternDurationOptions: {
-        range: {
-          min: 0,
-          max: 30,
-        },
+        range: { min: 0, max: 30 },
         start: [5, 10],
         padding: [1],
         step: 0.1,
         format: formatter(1, 's'),
       },
       transitionDurationOptions: {
-        range: {
-          min: 0,
-          max: 30,
-        },
+        range: { min: 0, max: 30 },
         start: [2, 5],
         padding: [0.5],
         step: 0.1,
         format: formatter(1, 's'),
       },
       twistRangeOptions: {
-        range: {
-          min: 0,
-          max: 1,
-        },
+        range: { min: 0, max: 1 },
         start: [0, 1],
         margin: 0.1,
       },
       twistPhaseOptions: {
-        range: {
-          min: -4,
-          max: 4,
-        },
+        range: { min: -4, max: 4 },
         start: [0],
       },
       twistEccOptions: {
-        range: {
-          min: -1,
-          max: 1,
-        },
+        range: { min: -1, max: 1 },
         start: [0],
       },
 
@@ -439,6 +434,19 @@ export default {
 
     this.onResize();
 
+    // FORCE L'ENVOI D'UN NOMBRE PUR [100] AU DÉMARRAGE
+    setTimeout(() => {
+        console.log("UI: Envoi initial paramètre...");
+        this.fireUpdateParameter('max-amplitude', [100]); 
+        
+        if (this.$refs.amplitudeSlider) {
+             const val = this.$refs.amplitudeSlider.get();
+             // Si val est un nombre ou un tableau de nombres, c'est bon.
+             console.log("UI: Lecture slider:", val);
+             this.fireUpdateParameter('max-amplitude', val);
+        }
+    }, 1000);
+
     this.fireUpdateParameter('bpm-mode', this.bpmMode);
   },
 
@@ -488,6 +496,10 @@ export default {
     },
 
     onUpdate (name, value) {
+      if (name === 'max-amplitude') {
+        // Cette ligne prouvera que ce n'est plus NaN
+        console.log(`UI: Slider bougé -> ${name} =`, value);
+      }
       this.fireUpdateParameter(name, value);
     },
 

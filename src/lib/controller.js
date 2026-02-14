@@ -28,6 +28,9 @@ class Controller extends GeneratorBehavior {
 
   #bpm;
 
+  // Mémoire du dernier mouvement
+  #lastStrokeConfig = null;
+
   constructor () {
     super();
 
@@ -73,21 +76,21 @@ class Controller extends GeneratorBehavior {
 
   startFreePlayMode () {
     this.#freePlay = true;
+    this.#lastStrokeConfig = null;
 
     if (this.#isScript()) {
-      // TODO: No... don't want to muck about with the behavior's complete status manually.
       this.#currentBehavior.complete = true;
     }
   }
 
   resetTimer () {
     if (this.#freePlay) {
-      const [from, to] = this.parameters['pattern-duration'];
+      const [min, max] = this.parameters['pattern-duration'];
 
-      if (from === to) {
-        this.#duration = new VariableDuration(from);
+      if (min === max) {
+        this.#duration = new VariableDuration(min);
       } else {
-        this.#duration = new VariableDuration(from, to);
+        this.#duration = new VariableDuration(min, max);
       }
     }
   }
@@ -100,7 +103,6 @@ class Controller extends GeneratorBehavior {
     if (this.#freePlay && this.#readyForNextStroke()) {
       return STATE.TRANSITION_FREE_PLAY;
     } else if (!this.#freePlay && this.#isScriptAndComplete()) {
-      // If a behavior completes itself in manual mode, simply stop().
       ayva.stop();
       return null;
     }
@@ -132,32 +134,125 @@ class Controller extends GeneratorBehavior {
     }
   }
 
-  * #transitionTempestStroke (ayva, strokeConfig) {
+  * #transitionTempestStroke (ayva, strokeConfigName) {
     this.#bpm = this.#generateNextBpm();
     const bpmProvider = this.#createBpmProvider();
 
+    let nextStrokeConfig = this.#createStrokeConfig(strokeConfigName);
+
+    // Application de la promenade aléatoire
+    if (this.#freePlay) {
+      nextStrokeConfig = this.#applyAmplitudeLimit(nextStrokeConfig);
+    }
+    
+    // Sauvegarde mémoire
+    this.#lastStrokeConfig = _.cloneDeep(nextStrokeConfig);
+
     if (this.#currentBehavior instanceof TempestStroke || scriptGlobals.output instanceof TempestStroke) {
       const currentStroke = this.#currentBehavior instanceof TempestStroke ? this.#currentBehavior : scriptGlobals.output;
-      // Create smooth transition to the next stroke.
+      
       const duration = this.#generateTransitionDuration();
       this.#currentBehavior = currentStroke
-        .transition(this.#createStrokeConfig(strokeConfig), bpmProvider, duration, this.#startTransition.bind(this), ($, bpm) => {
-          // Make sure we use the pretransformed stroke config for the event.
-          this.#endTransition(strokeConfig, bpm);
+        .transition(nextStrokeConfig, bpmProvider, duration, this.#startTransition.bind(this), ($, bpm) => {
+          this.#endTransition(strokeConfigName, bpm);
         });
 
       scriptGlobals.output = null;
 
       yield* this.#currentBehavior;
     } else {
-      // Just move to the start position for the new stroke.
-      this.#currentBehavior = new TempestStroke(this.#createStrokeConfig(strokeConfig), bpmProvider).bind(ayva);
+      this.#currentBehavior = new TempestStroke(nextStrokeConfig, bpmProvider).bind(ayva);
 
       this.#startTransition(1, this.#currentBehavior.bpm);
       yield* this.#currentBehavior.start({ duration: 1, value: Ayva.RAMP_PARABOLIC });
-      this.#endTransition(strokeConfig, this.#currentBehavior.bpm);
+      this.#endTransition(strokeConfigName, this.#currentBehavior.bpm);
     }
   }
+
+  // --------------------------------------------------------------------------
+  // LOGIQUE DE PROMENADE ALEATOIRE (RANDOM WALK)
+  // --------------------------------------------------------------------------
+  #applyAmplitudeLimit(strokeConfig) {
+    // 1. Récupération paramètre
+    let param = this.parameters['max-amplitude'];
+    if (param === undefined || param === null) param = 100; 
+
+    let rawValue = Array.isArray(param) ? param[0] : param;
+    rawValue = Number(rawValue);
+    if (isNaN(rawValue)) return strokeConfig;
+
+    const maxAmp = rawValue / 100;
+
+    // Si 100%, comportement normal
+    if (maxAmp >= 1) return strokeConfig;
+
+    const newConfig = _.cloneDeep(strokeConfig);
+
+    // --- LECTURE CIBLE ---
+    let targetObject = null;
+    if (newConfig.L0 && typeof newConfig.L0 === 'object' && newConfig.L0.from !== undefined) {
+        targetObject = newConfig.L0;
+    } else if (newConfig.stroke && typeof newConfig.stroke === 'object' && newConfig.stroke.from !== undefined) {
+        targetObject = newConfig.stroke;
+    } else {
+        targetObject = newConfig;
+    }
+    
+    if (targetObject.from === undefined || targetObject.to === undefined) return strokeConfig;
+
+    const originalFrom = targetObject.from;
+    const originalTo = targetObject.to;
+
+    // Lecture dernier centre
+    let lastCenter = 0.5;
+    if (this.#lastStrokeConfig) {
+        let lastObject = null;
+        if (this.#lastStrokeConfig.L0 && this.#lastStrokeConfig.L0.from !== undefined) lastObject = this.#lastStrokeConfig.L0;
+        else if (this.#lastStrokeConfig.stroke && this.#lastStrokeConfig.stroke.from !== undefined) lastObject = this.#lastStrokeConfig.stroke;
+        else lastObject = this.#lastStrokeConfig;
+        
+        if (lastObject && lastObject.from !== undefined) {
+             lastCenter = (lastObject.from + lastObject.to) / 2;
+        }
+    }
+
+    // --- CALCUL DE LA PROMENADE ---
+    
+    // 1. Définir la hauteur de la vague
+    // On garde la hauteur originale seulement si elle est plus petite que la limite.
+    // Sinon, on la force à la limite (ex: 30%).
+    const originalHeight = Math.abs(originalTo - originalFrom);
+    const allowedHeight = Math.min(originalHeight, maxAmp);
+    const radius = allowedHeight / 2;
+
+    // 2. Calculer le nouveau centre (C'est ici que la magie opère)
+    // Au lieu de viser 0.5, on vise : Dernier Endroit + Dérive Aléatoire
+    
+    // Génère un nombre entre -1 et 1
+    const randomDirection = (Math.random() * 2) - 1; 
+    
+    // On autorise un décalage proportionnel à l'amplitude (ou un peu plus pour que ça bouge bien)
+    // Ici, on autorise à bouger de 'maxAmp' vers le haut ou le bas.
+    const drift = randomDirection * maxAmp;
+    
+    let newCenter = lastCenter + drift;
+
+    // 3. Sécurité (Murs)
+    // On s'assure que la vague ne dépasse pas 0 ou 1
+    // Le centre ne peut pas être plus bas que le rayon, ni plus haut que 1-rayon.
+    newCenter = clamp(newCenter, radius, 1 - radius);
+    
+    // 4. Application
+    const newFrom = newCenter - radius;
+    const newTo = newCenter + radius;
+
+    // --- ÉCRITURE CHIRURGICALE ---
+    targetObject.from = newFrom;
+    targetObject.to = newTo;
+
+    return newConfig;
+  }
+  // --------------------------------------------------------------------------
 
   #isScriptAndComplete () {
     return this.#isScript() && this.#currentBehavior.complete;
@@ -173,8 +268,6 @@ class Controller extends GeneratorBehavior {
 
   #endTransition (strokeConfig, bpm) {
     this.$emit('transition-end', strokeConfig, bpm);
-
-    // Start the timer for the next stroke after finishing the transition.
     this.resetTimer();
   }
 
@@ -183,7 +276,8 @@ class Controller extends GeneratorBehavior {
       const customBehaviorLibrary = this.#customBehaviorStorage.load();
       const config = customBehaviorLibrary[stroke]?.data || TempestStroke.library[stroke];
 
-      const existingTwist = config.twist || config.R0;
+      const clonedConfig = _.cloneDeep(config);
+      const existingTwist = clonedConfig.twist || clonedConfig.R0;
       const noTwist = !existingTwist || (existingTwist.from === 0.5 && existingTwist.to === 0.5);
 
       if (this.parameters.twist && noTwist) {
@@ -191,23 +285,19 @@ class Controller extends GeneratorBehavior {
         const phase = this.parameters['twist-phase'];
         const ecc = this.parameters['twist-ecc'];
 
-        config.R0 = {
+        clonedConfig.R0 = {
           from, to, phase, ecc,
         };
       }
 
-      return config;
+      return clonedConfig;
     }
 
     return stroke;
   }
 
   #readyForNextStroke () {
-    // We're ready for the next stroke when the duration has elapsed, we have strokes available,
-    // and also the user is not mucking about with the bpm slider.
     const ready = (!this.#duration || this.#duration.complete) && this.strokes.length && !this.bpmSliderState.active;
-
-    // ... OR, if we are a script behavior and have completed.
     return (ready && !this.#isScript()) || this.#isScriptAndComplete();
   }
 
@@ -231,7 +321,6 @@ class Controller extends GeneratorBehavior {
   #createBpmProvider () {
     const bpmProvider = () => {
       if (!this.#freePlay || this.bpmSliderState.active || this.bpmSliderState.updated) {
-        // Use user supplied bpm from slider.
         this.#bpm = this.bpmSliderState.value;
         this.bpmSliderState.updated = false;
       }
@@ -289,7 +378,6 @@ class Controller extends GeneratorBehavior {
     }
 
     scriptGlobals.output = null;
-
     scriptGlobals.parameters = parameters;
 
     Object.defineProperty(scriptGlobals, 'mode', {
