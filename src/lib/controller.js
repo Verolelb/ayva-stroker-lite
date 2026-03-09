@@ -11,6 +11,7 @@ const STATE = {
   TRANSITION_MANUAL: 0,
   TRANSITION_FREE_PLAY: 1,
   STROKING: 2,
+  PAUSING: 3, 
 };
 
 const scriptGlobals = {};
@@ -28,8 +29,9 @@ class Controller extends GeneratorBehavior {
 
   #bpm;
 
-  // Mémoire du dernier mouvement
   #lastStrokeConfig = null;
+  
+  #nextPauseTime = null;
 
   constructor () {
     super();
@@ -50,22 +52,25 @@ class Controller extends GeneratorBehavior {
       case STATE.TRANSITION_MANUAL:
         yield* this.#createTransition(ayva, this.#manualBehavior);
         this.#resetManualMode();
-
         break;
+
       case STATE.TRANSITION_FREE_PLAY:
         yield* this.#createTransition(ayva, _.sample(this.strokes));
-
         break;
+
+      case STATE.PAUSING:
+        yield* this.#createPause(ayva);
+        break;
+
       case STATE.STROKING:
         if (this.#currentBehavior instanceof TempestStroke) {
           yield* this.#currentBehavior;
         } else {
           yield this.#currentBehavior.next();
         }
-
         break;
+
       default:
-        // Waiting for a command.
         yield 0.1;
     }
   }
@@ -77,6 +82,7 @@ class Controller extends GeneratorBehavior {
   startFreePlayMode () {
     this.#freePlay = true;
     this.#lastStrokeConfig = null;
+    this.#scheduleNextPause(); 
 
     if (this.#isScript()) {
       this.#currentBehavior.complete = true;
@@ -101,6 +107,9 @@ class Controller extends GeneratorBehavior {
     }
 
     if (this.#freePlay && this.#readyForNextStroke()) {
+      if (this.#nextPauseTime && performance.now() >= this.#nextPauseTime) {
+          return STATE.PAUSING;
+      }
       return STATE.TRANSITION_FREE_PLAY;
     } else if (!this.#freePlay && this.#isScriptAndComplete()) {
       ayva.stop();
@@ -118,7 +127,85 @@ class Controller extends GeneratorBehavior {
     this.#manualBehavior = null;
     this.#duration = null;
     this.#freePlay = false;
+    this.#nextPauseTime = null;
   }
+
+  // --------------------------------------------------------------------------
+  // LOGIQUE DES PAUSES
+  // --------------------------------------------------------------------------
+  #scheduleNextPause() {
+    const intervalParam = this.parameters['pause-interval'];
+    if (!intervalParam) {
+        this.#nextPauseTime = null;
+        return;
+    }
+    
+    const minI = parseFloat(Array.isArray(intervalParam) ? intervalParam[0] : intervalParam);
+    const maxI = parseFloat(Array.isArray(intervalParam) && intervalParam[1] !== undefined ? intervalParam[1] : minI);
+    
+    if (isNaN(minI) || isNaN(maxI) || maxI === 0) {
+        this.#nextPauseTime = null;
+        return;
+    }
+    
+    const intervalMs = Ayva.map(Math.random(), 0, 1, minI, maxI) * 1000;
+    this.#nextPauseTime = performance.now() + intervalMs;
+    console.log(`⏳ [Pause] Programmée dans ${(intervalMs/1000).toFixed(1)}s`);
+  }
+
+  * #createPause(ayva) {
+    const durationParam = this.parameters['pause-duration'];
+    let minD = 0, maxD = 0;
+    
+    if (durationParam) {
+        minD = parseFloat(Array.isArray(durationParam) ? durationParam[0] : durationParam);
+        maxD = parseFloat(Array.isArray(durationParam) && durationParam[1] !== undefined ? durationParam[1] : minD);
+    }
+    
+    if (isNaN(minD) || isNaN(maxD)) {
+        minD = 0; maxD = 0;
+    }
+    
+    const pauseDuration = Ayva.map(Math.random(), 0, 1, minD, maxD);
+    
+    console.log(`⏸️ [Pause] Exécution de la pause pour ${pauseDuration.toFixed(1)}s`);
+    
+    if (pauseDuration > 0) {
+        this.$emit('update-current-behavior', `Pausing...`);
+        this.$emit('transition-start', 1, 30);
+        
+        // --- LE CORRECTIF EST ICI ---
+        // On vérifie si on a bien en mémoire le mouvement en cours (ce qui est toujours le cas)
+        if (this.#lastStrokeConfig) {
+            // On clone la vraie configuration valide
+            let pauseConfig = _.cloneDeep(this.#lastStrokeConfig);
+            
+            // On écrase ses positions pour le forcer à s'arrêter au centre
+            if (pauseConfig.L0) { pauseConfig.L0.from = 0.5; pauseConfig.L0.to = 0.5; }
+            if (pauseConfig.stroke) { pauseConfig.stroke.from = 0.5; pauseConfig.stroke.to = 0.5; }
+            if (pauseConfig.from !== undefined) { pauseConfig.from = 0.5; pauseConfig.to = 0.5; }
+
+            const pauseStroke = new TempestStroke(pauseConfig, 30).bind(ayva);
+            yield* pauseStroke.start({ duration: 1, value: Ayva.RAMP_PARABOLIC });
+        } else {
+            // Sécurité ultime : Si pour une raison inconnue on a pas de mémoire,
+            // on demande à Ayva de se centrer nativement
+            yield ayva.move({ axis: 'stroke', to: 0.5, duration: 1 });
+        }
+        // -----------------------------
+
+        this.$emit('transition-end', `Paused (${pauseDuration.toFixed(1)}s)`, 0);
+        
+        // On lance la vraie pause
+        yield pauseDuration;
+    }
+    
+    console.log(`▶️ [Pause] Fin de la pause, reprise !`);
+    this.#scheduleNextPause();
+    this.#currentBehavior = null;
+    this.#duration = null; 
+  }
+  // --------------------------------------------------------------------------
 
   * #createTransition (ayva, name) {
     const customBehaviorLibrary = this.#customBehaviorStorage.load();
@@ -140,12 +227,10 @@ class Controller extends GeneratorBehavior {
 
     let nextStrokeConfig = this.#createStrokeConfig(strokeConfigName);
 
-    // Application de la promenade aléatoire
     if (this.#freePlay) {
       nextStrokeConfig = this.#applyAmplitudeLimit(nextStrokeConfig);
     }
     
-    // Sauvegarde mémoire
     this.#lastStrokeConfig = _.cloneDeep(nextStrokeConfig);
 
     if (this.#currentBehavior instanceof TempestStroke || scriptGlobals.output instanceof TempestStroke) {
@@ -169,26 +254,20 @@ class Controller extends GeneratorBehavior {
     }
   }
 
-  // --------------------------------------------------------------------------
-  // LOGIQUE DE PROMENADE ALEATOIRE (RANDOM WALK)
-  // --------------------------------------------------------------------------
   #applyAmplitudeLimit(strokeConfig) {
-    // 1. Récupération paramètre
     let param = this.parameters['max-amplitude'];
     if (param === undefined || param === null) param = 100; 
 
     let rawValue = Array.isArray(param) ? param[0] : param;
     rawValue = Number(rawValue);
+
     if (isNaN(rawValue)) return strokeConfig;
 
     const maxAmp = rawValue / 100;
-
-    // Si 100%, comportement normal
     if (maxAmp >= 1) return strokeConfig;
 
     const newConfig = _.cloneDeep(strokeConfig);
 
-    // --- LECTURE CIBLE ---
     let targetObject = null;
     if (newConfig.L0 && typeof newConfig.L0 === 'object' && newConfig.L0.from !== undefined) {
         targetObject = newConfig.L0;
@@ -198,12 +277,13 @@ class Controller extends GeneratorBehavior {
         targetObject = newConfig;
     }
     
-    if (targetObject.from === undefined || targetObject.to === undefined) return strokeConfig;
+    if (targetObject.from === undefined || targetObject.to === undefined) {
+        return strokeConfig;
+    }
 
-    const originalFrom = targetObject.from;
-    const originalTo = targetObject.to;
+    const targetFrom = targetObject.from;
+    const targetTo = targetObject.to;
 
-    // Lecture dernier centre
     let lastCenter = 0.5;
     if (this.#lastStrokeConfig) {
         let lastObject = null;
@@ -216,43 +296,27 @@ class Controller extends GeneratorBehavior {
         }
     }
 
-    // --- CALCUL DE LA PROMENADE ---
+    let targetCenter = (targetFrom + targetTo) / 2;
+    const targetHeight = Math.abs(targetTo - targetFrom);
     
-    // 1. Définir la hauteur de la vague
-    // On garde la hauteur originale seulement si elle est plus petite que la limite.
-    // Sinon, on la force à la limite (ex: 30%).
-    const originalHeight = Math.abs(originalTo - originalFrom);
-    const allowedHeight = Math.min(originalHeight, maxAmp);
-    const radius = allowedHeight / 2;
-
-    // 2. Calculer le nouveau centre (C'est ici que la magie opère)
-    // Au lieu de viser 0.5, on vise : Dernier Endroit + Dérive Aléatoire
-    
-    // Génère un nombre entre -1 et 1
     const randomDirection = (Math.random() * 2) - 1; 
-    
-    // On autorise un décalage proportionnel à l'amplitude (ou un peu plus pour que ça bouge bien)
-    // Ici, on autorise à bouger de 'maxAmp' vers le haut ou le bas.
     const drift = randomDirection * maxAmp;
     
     let newCenter = lastCenter + drift;
 
-    // 3. Sécurité (Murs)
-    // On s'assure que la vague ne dépasse pas 0 ou 1
-    // Le centre ne peut pas être plus bas que le rayon, ni plus haut que 1-rayon.
-    newCenter = clamp(newCenter, radius, 1 - radius);
+    const allowedHeight = Math.min(targetHeight, maxAmp);
+    const radius = allowedHeight / 2;
     
-    // 4. Application
+    newCenter = clamp(newCenter, radius, 1 - radius);
+
     const newFrom = newCenter - radius;
     const newTo = newCenter + radius;
 
-    // --- ÉCRITURE CHIRURGICALE ---
     targetObject.from = newFrom;
     targetObject.to = newTo;
 
     return newConfig;
   }
-  // --------------------------------------------------------------------------
 
   #isScriptAndComplete () {
     return this.#isScript() && this.#currentBehavior.complete;

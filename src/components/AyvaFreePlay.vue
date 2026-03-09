@@ -30,7 +30,6 @@
           />
         </div>
         
-        <!-- SLIDER AMPLITUDE (CORRIGÉ: PAS DE %) -->
         <div class="limit">
           <div class="axis">
             Max Amplitude
@@ -40,6 +39,32 @@
             :options="amplitudeOptions"
             storage-key="free-play-max-amplitude"
             @update="onUpdate('max-amplitude', $event)"
+          />
+        </div>
+
+        <!-- PAUSE INTERVAL (0 - 120s) -->
+        <div class="limit">
+          <div class="axis">
+            Pause Interval
+          </div>
+          <ayva-slider
+            ref="pauseIntervalSlider"
+            :options="pauseIntervalOptions"
+            storage-key="free-play-pause-interval"
+            @update="onUpdate('pause-interval', $event)"
+          />
+        </div>
+
+        <!-- PAUSE DURATION (0 - 20s) -->
+        <div class="limit">
+          <div class="axis">
+            Pause Duration
+          </div>
+          <ayva-slider
+            ref="pauseDurationSlider"
+            :options="pauseDurationOptions"
+            storage-key="free-play-pause-duration"
+            @update="onUpdate('pause-duration', $event)"
           />
         </div>
 
@@ -286,14 +311,23 @@ export default {
         step: 1,
         format: formatter(),
       },
-      // --- CORRECTION ICI : PAS DE FORMATAGE TEXTE ---
       amplitudeOptions: {
         range: { min: 10, max: 100 },
         start: [100],
         step: 1,
-        // format: ... SUPPRIMÉ POUR ÉVITER LE BUG NaN
       },
-      // -----------------------------------------------
+      pauseIntervalOptions: {
+        range: { min: 0, max: 120 },
+        start: [0, 0], // Par défaut: 0 = pas de pause
+        step: 1,
+        format: formatter(0, 's'),
+      },
+      pauseDurationOptions: {
+        range: { min: 0, max: 20 },
+        start: [0, 0], // Par défaut: 0 = pas de pause
+        step: 1,
+        format: formatter(0, 's'),
+      },
       accelerationOptions: {
         range: { min: 0, max: 200 },
         start: [0, 20],
@@ -434,17 +468,15 @@ export default {
 
     this.onResize();
 
-    // FORCE L'ENVOI D'UN NOMBRE PUR [100] AU DÉMARRAGE
+    // FORCE L'ENVOI DES VALEURS PAR DEFAUT AU CONTROLEUR
     setTimeout(() => {
-        console.log("UI: Envoi initial paramètre...");
         this.fireUpdateParameter('max-amplitude', [100]); 
+        this.fireUpdateParameter('pause-interval', [0, 0]); 
+        this.fireUpdateParameter('pause-duration', [0, 0]); 
         
-        if (this.$refs.amplitudeSlider) {
-             const val = this.$refs.amplitudeSlider.get();
-             // Si val est un nombre ou un tableau de nombres, c'est bon.
-             console.log("UI: Lecture slider:", val);
-             this.fireUpdateParameter('max-amplitude', val);
-        }
+        if (this.$refs.amplitudeSlider) this.fireUpdateParameter('max-amplitude', this.$refs.amplitudeSlider.get());
+        if (this.$refs.pauseIntervalSlider) this.fireUpdateParameter('pause-interval', this.$refs.pauseIntervalSlider.get());
+        if (this.$refs.pauseDurationSlider) this.fireUpdateParameter('pause-duration', this.$refs.pauseDurationSlider.get());
     }, 1000);
 
     this.fireUpdateParameter('bpm-mode', this.bpmMode);
@@ -496,10 +528,6 @@ export default {
     },
 
     onUpdate (name, value) {
-      if (name === 'max-amplitude') {
-        // Cette ligne prouvera que ce n'est plus NaN
-        console.log(`UI: Slider bougé -> ${name} =`, value);
-      }
       this.fireUpdateParameter(name, value);
     },
 
@@ -666,94 +694,21 @@ export default {
 </script>
 
 <style scoped>
-
-.axis {
-  display: flex;
-  align-items: center;
-}
-
-.preview.icon {
-  color: var(--ayva-text-color-off-white);
-  margin-top: 0;
-  height: 20px;
-  cursor: default;
-}
-
-.preview.icon[disabled] {
-  cursor: not-allowed;
-}
-
-.stroke-actions {
-  padding-left: 10px;
-}
-
-.settings.icon {
-  width: 18px;
-  outline: none;
-  position: relative;
-  top: 2px;
-  margin-right: 3px;
-}
-
-.settings.icon[disabled] {
-  opacity: 0.25;
-}
-
-.stroke-actions .settings.icon {
-  top: -1px;
-  margin-left: 5px;
-}
-
-.info {
-  content: "Empty";
-  padding: 0 var(--padding);
-  margin: 2px 0;
-  display: block;
-  font-style: italic;
-  line-height: var(--widget-height);
-  opacity: 0.75;
-  align-items: center;
-  justify-content: center;
-  display: flex;
-  gap: 10px;
-}
-
-.free-play-container .title {
-  display: flex;
-  align-items: flex-start;
-}
-
-.free-play-container .title > *:not(.settings-container) {
-  position: relative;
-  top: 2px;
-}
-
-.current-stroke-container, .settings-container {
-  padding-left: 25px;
-  margin-left: auto;
-}
-
-.current-stroke-container {
-  display: flex;
-}
-
-.tempest-stroke button:focus {
-  border: none;
-}
-
-.tempest-stroke button {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  padding: 0 10px;
-}
-
-.guide {
-  margin-left: auto;
-  padding-left: 25px;
-}
-
-.guide a {
-  color: var(--ayva-blue);
-}
+/* (Le CSS reste identique) */
+.axis { display: flex; align-items: center; }
+.preview.icon { color: var(--ayva-text-color-off-white); margin-top: 0; height: 20px; cursor: default; }
+.preview.icon[disabled] { cursor: not-allowed; }
+.stroke-actions { padding-left: 10px; }
+.settings.icon { width: 18px; outline: none; position: relative; top: 2px; margin-right: 3px; }
+.settings.icon[disabled] { opacity: 0.25; }
+.stroke-actions .settings.icon { top: -1px; margin-left: 5px; }
+.info { content: "Empty"; padding: 0 var(--padding); margin: 2px 0; display: block; font-style: italic; line-height: var(--widget-height); opacity: 0.75; align-items: center; justify-content: center; display: flex; gap: 10px; }
+.free-play-container .title { display: flex; align-items: flex-start; }
+.free-play-container .title > *:not(.settings-container) { position: relative; top: 2px; }
+.current-stroke-container, .settings-container { padding-left: 25px; margin-left: auto; }
+.current-stroke-container { display: flex; }
+.tempest-stroke button:focus { border: none; }
+.tempest-stroke button { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 10px; }
+.guide { margin-left: auto; padding-left: 25px; }
+.guide a { color: var(--ayva-blue); }
 </style>
