@@ -131,7 +131,7 @@ class Controller extends GeneratorBehavior {
   }
 
   // --------------------------------------------------------------------------
-  // LOGIQUE DES PAUSES (Sur Place)
+  // LOGIQUE DES PAUSES (MOUVEMENT SUR MESURE)
   // --------------------------------------------------------------------------
   #scheduleNextPause() {
     const intervalParam = this.parameters['pause-interval'];
@@ -168,19 +168,39 @@ class Controller extends GeneratorBehavior {
     const pauseDuration = Ayva.map(Math.random(), 0, 1, minD, maxD);
     
     if (pauseDuration > 0) {
-        // On avertit l'interface qu'on est en pause
-        this.$emit('transition-start', 1, 0);
-        this.$emit('update-current-behavior', `Paused (${pauseDuration.toFixed(1)}s)`);
-        this.$emit('transition-end', `Paused (${pauseDuration.toFixed(1)}s)`, 0);
+        this.$emit('update-current-behavior', `Pausing...`);
+        this.$emit('transition-start', 0.5, 0); 
         
-        // On endort le robot à sa position EXACTE pendant la durée de la pause
+        // 1. FREINAGE DOUX : On arrête le mouvement en cours (s'il y en a un)
+        // en disant au robot de rejoindre doucement sa position actuelle (sur 0.5s)
+        this.#currentBehavior = null; // Coupe l'ancien mouvement
+        
+        const currentStrokeValue = ayva.$.stroke.value || 0.5;
+        
+        yield ayva.move({ 
+            axis: 'stroke', 
+            to: currentStrokeValue, 
+            duration: 0.5,
+            value: Ayva.RAMP_PARABOLIC 
+        });
+
+        // 2. PAUSE
+        this.$emit('transition-end', `Paused (${pauseDuration.toFixed(1)}s)`, 0);
         yield ayva.sleep(pauseDuration);
     }
     
-    // Reprise
+    // 3. REPRISE : On nettoie tout et on tire un nouveau BPM
     this.#scheduleNextPause();
     this.#currentBehavior = null;
     this.#duration = null; 
+    
+    // On force l'interface graphique à remettre un BPM normal
+    this.#bpm = this.#generateNextBpm();
+    this.$emit('update-bpm', this.#bpm);
+    
+    // On efface la mémoire de vitesse pour forcer le prochain mouvement à repartir à fond
+    this.bpmSliderState.updated = true;
+    this.bpmSliderState.value = this.#bpm;
   }
   // --------------------------------------------------------------------------
 
@@ -200,6 +220,10 @@ class Controller extends GeneratorBehavior {
 
   * #transitionTempestStroke (ayva, strokeConfigName) {
     this.#bpm = this.#generateNextBpm();
+    
+    // Assure que l'UI affiche la bonne vitesse
+    this.$emit('update-bpm', this.#bpm);
+    
     const bpmProvider = this.#createBpmProvider();
 
     let nextStrokeConfig = this.#createStrokeConfig(strokeConfigName);
@@ -223,6 +247,7 @@ class Controller extends GeneratorBehavior {
 
       yield* this.#currentBehavior;
     } else {
+      // SI ON REPART DE ZERO (APRÈS UNE PAUSE PAR EXEMPLE)
       this.#currentBehavior = new TempestStroke(nextStrokeConfig, bpmProvider).bind(ayva);
 
       this.#startTransition(1, this.#currentBehavior.bpm);
@@ -361,9 +386,15 @@ class Controller extends GeneratorBehavior {
 
   #createBpmProvider () {
     const bpmProvider = () => {
-      if (!this.#freePlay || this.bpmSliderState.active || this.bpmSliderState.updated) {
-        this.#bpm = this.bpmSliderState.value;
-        this.bpmSliderState.updated = false;
+      // Priorité à la nouvelle valeur forcée par la pause si elle existe
+      if (this.bpmSliderState.updated && this.#freePlay) {
+          this.#bpm = this.bpmSliderState.value;
+          this.bpmSliderState.updated = false;
+      }
+      // Sinon on lit normalement le slider si l'utilisateur l'a touché
+      else if (!this.#freePlay || this.bpmSliderState.active) {
+          this.#bpm = this.bpmSliderState.value;
+          this.bpmSliderState.updated = false;
       }
 
       if (this.parameters['bpm-mode'] === 'continuous') {
