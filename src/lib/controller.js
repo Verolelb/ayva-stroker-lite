@@ -131,7 +131,7 @@ class Controller extends GeneratorBehavior {
   }
 
   // --------------------------------------------------------------------------
-  // LOGIQUE DES PAUSES
+  // LOGIQUE DES PAUSES (Sur Place)
   // --------------------------------------------------------------------------
   #scheduleNextPause() {
     const intervalParam = this.parameters['pause-interval'];
@@ -150,7 +150,6 @@ class Controller extends GeneratorBehavior {
     
     const intervalMs = Ayva.map(Math.random(), 0, 1, minI, maxI) * 1000;
     this.#nextPauseTime = performance.now() + intervalMs;
-    console.log(`⏳ [Pause] Programmée dans ${(intervalMs/1000).toFixed(1)}s`);
   }
 
   * #createPause(ayva) {
@@ -168,39 +167,17 @@ class Controller extends GeneratorBehavior {
     
     const pauseDuration = Ayva.map(Math.random(), 0, 1, minD, maxD);
     
-    console.log(`⏸️ [Pause] Exécution de la pause pour ${pauseDuration.toFixed(1)}s`);
-    
     if (pauseDuration > 0) {
-        this.$emit('update-current-behavior', `Pausing...`);
-        this.$emit('transition-start', 1, 30);
-        
-        // --- LE CORRECTIF EST ICI ---
-        // On vérifie si on a bien en mémoire le mouvement en cours (ce qui est toujours le cas)
-        if (this.#lastStrokeConfig) {
-            // On clone la vraie configuration valide
-            let pauseConfig = _.cloneDeep(this.#lastStrokeConfig);
-            
-            // On écrase ses positions pour le forcer à s'arrêter au centre
-            if (pauseConfig.L0) { pauseConfig.L0.from = 0.5; pauseConfig.L0.to = 0.5; }
-            if (pauseConfig.stroke) { pauseConfig.stroke.from = 0.5; pauseConfig.stroke.to = 0.5; }
-            if (pauseConfig.from !== undefined) { pauseConfig.from = 0.5; pauseConfig.to = 0.5; }
-
-            const pauseStroke = new TempestStroke(pauseConfig, 30).bind(ayva);
-            yield* pauseStroke.start({ duration: 1, value: Ayva.RAMP_PARABOLIC });
-        } else {
-            // Sécurité ultime : Si pour une raison inconnue on a pas de mémoire,
-            // on demande à Ayva de se centrer nativement
-            yield ayva.move({ axis: 'stroke', to: 0.5, duration: 1 });
-        }
-        // -----------------------------
-
+        // On avertit l'interface qu'on est en pause
+        this.$emit('transition-start', 1, 0);
+        this.$emit('update-current-behavior', `Paused (${pauseDuration.toFixed(1)}s)`);
         this.$emit('transition-end', `Paused (${pauseDuration.toFixed(1)}s)`, 0);
         
-        // On lance la vraie pause
-        yield pauseDuration;
+        // On endort le robot à sa position EXACTE pendant la durée de la pause
+        yield ayva.sleep(pauseDuration);
     }
     
-    console.log(`▶️ [Pause] Fin de la pause, reprise !`);
+    // Reprise
     this.#scheduleNextPause();
     this.#currentBehavior = null;
     this.#duration = null; 
