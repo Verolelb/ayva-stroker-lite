@@ -11,7 +11,6 @@ const STATE = {
   TRANSITION_MANUAL: 0,
   TRANSITION_FREE_PLAY: 1,
   STROKING: 2,
-  PAUSING: 3, 
 };
 
 const scriptGlobals = {};
@@ -31,7 +30,13 @@ class Controller extends GeneratorBehavior {
 
   #lastStrokeConfig = null;
   
+  // VARIABLES DE PAUSE "TIME MANIPULATION"
   #nextPauseTime = null;
+  #pauseState = 'NONE'; // 'NONE', 'DECELERATING', 'PAUSED', 'ACCELERATING'
+  #pauseStartTime = 0;
+  #pauseDurationMs = 0;
+  #prePauseBpm = 60;
+  #currentStrokeNameStr = '';
 
   constructor () {
     super();
@@ -58,10 +63,6 @@ class Controller extends GeneratorBehavior {
         yield* this.#createTransition(ayva, _.sample(this.strokes));
         break;
 
-      case STATE.PAUSING:
-        yield* this.#createPause(ayva);
-        break;
-
       case STATE.STROKING:
         if (this.#currentBehavior instanceof TempestStroke) {
           yield* this.#currentBehavior;
@@ -82,6 +83,9 @@ class Controller extends GeneratorBehavior {
   startFreePlayMode () {
     this.#freePlay = true;
     this.#lastStrokeConfig = null;
+    
+    // Initialisation du cycle de pauses
+    this.#pauseState = 'NONE';
     this.#scheduleNextPause(); 
 
     if (this.#isScript()) {
@@ -107,9 +111,6 @@ class Controller extends GeneratorBehavior {
     }
 
     if (this.#freePlay && this.#readyForNextStroke()) {
-      if (this.#nextPauseTime && performance.now() >= this.#nextPauseTime) {
-          return STATE.PAUSING;
-      }
       return STATE.TRANSITION_FREE_PLAY;
     } else if (!this.#freePlay && this.#isScriptAndComplete()) {
       ayva.stop();
@@ -127,11 +128,14 @@ class Controller extends GeneratorBehavior {
     this.#manualBehavior = null;
     this.#duration = null;
     this.#freePlay = false;
+    
+    // Reset pause
     this.#nextPauseTime = null;
+    this.#pauseState = 'NONE';
   }
 
   // --------------------------------------------------------------------------
-  // LOGIQUE DES PAUSES (MOUVEMENT SUR MESURE)
+  // HORLOGE DES PAUSES 
   // --------------------------------------------------------------------------
   #scheduleNextPause() {
     const intervalParam = this.parameters['pause-interval'];
@@ -151,57 +155,6 @@ class Controller extends GeneratorBehavior {
     const intervalMs = Ayva.map(Math.random(), 0, 1, minI, maxI) * 1000;
     this.#nextPauseTime = performance.now() + intervalMs;
   }
-
-  * #createPause(ayva) {
-    const durationParam = this.parameters['pause-duration'];
-    let minD = 0, maxD = 0;
-    
-    if (durationParam) {
-        minD = parseFloat(Array.isArray(durationParam) ? durationParam[0] : durationParam);
-        maxD = parseFloat(Array.isArray(durationParam) && durationParam[1] !== undefined ? durationParam[1] : minD);
-    }
-    
-    if (isNaN(minD) || isNaN(maxD)) {
-        minD = 0; maxD = 0;
-    }
-    
-    const pauseDuration = Ayva.map(Math.random(), 0, 1, minD, maxD);
-    
-    if (pauseDuration > 0) {
-        this.$emit('update-current-behavior', `Pausing...`);
-        this.$emit('transition-start', 0.5, 0); 
-        
-        // 1. FREINAGE DOUX : On arrête le mouvement en cours (s'il y en a un)
-        // en disant au robot de rejoindre doucement sa position actuelle (sur 0.5s)
-        this.#currentBehavior = null; // Coupe l'ancien mouvement
-        
-        const currentStrokeValue = ayva.$.stroke.value || 0.5;
-        
-        yield ayva.move({ 
-            axis: 'stroke', 
-            to: currentStrokeValue, 
-            duration: 0.5,
-            value: Ayva.RAMP_PARABOLIC 
-        });
-
-        // 2. PAUSE
-        this.$emit('transition-end', `Paused (${pauseDuration.toFixed(1)}s)`, 0);
-        yield ayva.sleep(pauseDuration);
-    }
-    
-    // 3. REPRISE : On nettoie tout et on tire un nouveau BPM
-    this.#scheduleNextPause();
-    this.#currentBehavior = null;
-    this.#duration = null; 
-    
-    // On force l'interface graphique à remettre un BPM normal
-    this.#bpm = this.#generateNextBpm();
-    this.$emit('update-bpm', this.#bpm);
-    
-    // On efface la mémoire de vitesse pour forcer le prochain mouvement à repartir à fond
-    this.bpmSliderState.updated = true;
-    this.bpmSliderState.value = this.#bpm;
-  }
   // --------------------------------------------------------------------------
 
   * #createTransition (ayva, name) {
@@ -220,10 +173,10 @@ class Controller extends GeneratorBehavior {
 
   * #transitionTempestStroke (ayva, strokeConfigName) {
     this.#bpm = this.#generateNextBpm();
-    
-    // Assure que l'UI affiche la bonne vitesse
     this.$emit('update-bpm', this.#bpm);
     
+    this.#currentStrokeNameStr = strokeConfigName; // Sauvegarde du nom pour l'UI
+
     const bpmProvider = this.#createBpmProvider();
 
     let nextStrokeConfig = this.#createStrokeConfig(strokeConfigName);
@@ -247,7 +200,6 @@ class Controller extends GeneratorBehavior {
 
       yield* this.#currentBehavior;
     } else {
-      // SI ON REPART DE ZERO (APRÈS UNE PAUSE PAR EXEMPLE)
       this.#currentBehavior = new TempestStroke(nextStrokeConfig, bpmProvider).bind(ayva);
 
       this.#startTransition(1, this.#currentBehavior.bpm);
@@ -256,6 +208,9 @@ class Controller extends GeneratorBehavior {
     }
   }
 
+  // --------------------------------------------------------------------------
+  // LOGIQUE WANDERING / AMPLITUDE
+  // --------------------------------------------------------------------------
   #applyAmplitudeLimit(strokeConfig) {
     let param = this.parameters['max-amplitude'];
     if (param === undefined || param === null) param = 100; 
@@ -363,6 +318,9 @@ class Controller extends GeneratorBehavior {
   }
 
   #readyForNextStroke () {
+    // On ne change pas de mouvement tant qu'on est pris dans le cycle de pause
+    if (this.#pauseState !== 'NONE') return false;
+    
     const ready = (!this.#duration || this.#duration.complete) && this.strokes.length && !this.bpmSliderState.active;
     return (ready && !this.#isScript()) || this.#isScriptAndComplete();
   }
@@ -386,15 +344,11 @@ class Controller extends GeneratorBehavior {
 
   #createBpmProvider () {
     const bpmProvider = () => {
-      // Priorité à la nouvelle valeur forcée par la pause si elle existe
-      if (this.bpmSliderState.updated && this.#freePlay) {
-          this.#bpm = this.bpmSliderState.value;
-          this.bpmSliderState.updated = false;
-      }
-      // Sinon on lit normalement le slider si l'utilisateur l'a touché
-      else if (!this.#freePlay || this.bpmSliderState.active) {
-          this.#bpm = this.bpmSliderState.value;
-          this.bpmSliderState.updated = false;
+      
+      // 1. CALCUL DU BPM NORMAL
+      if (!this.#freePlay || this.bpmSliderState.active || this.bpmSliderState.updated) {
+        this.#bpm = this.bpmSliderState.value;
+        this.bpmSliderState.updated = false;
       }
 
       if (this.parameters['bpm-mode'] === 'continuous') {
@@ -425,7 +379,97 @@ class Controller extends GeneratorBehavior {
         }
       }
 
-      return this.#bpm;
+      let targetBpm = this.#bpm;
+
+      // ----------------------------------------------------------------------
+      // 2. HIJACKING DU BPM POUR LA PAUSE (CONTRÔLE TOTAL DU TEMPS)
+      // ----------------------------------------------------------------------
+      if (this.#freePlay) {
+          const now = performance.now();
+
+          // A) DÉCLENCHEMENT DE LA DÉCÉLÉRATION
+          if (this.#pauseState === 'NONE' && this.#nextPauseTime && now >= this.#nextPauseTime) {
+              this.#pauseState = 'DECELERATING';
+              this.#pauseStartTime = now;
+              this.#prePauseBpm = targetBpm; // On sauvegarde la vraie vitesse du moment
+              this.$emit('update-current-behavior', 'Pausing...');
+          }
+
+          // B) LA DÉCÉLÉRATION
+          if (this.#pauseState === 'DECELERATING') {
+              const elapsed = now - this.#pauseStartTime;
+              if (elapsed < 1000) { 
+                  // Pendant 1 seconde exactement, on freine
+                  const progress = elapsed / 1000;
+                  // Courbe exponentielle douce (Cosinus : tombe de 1 à 0)
+                  const curve = Math.cos(progress * (Math.PI / 2)); 
+                  
+                  // On renvoie un BPM qui chute jusqu'à presque zéro
+                  return Math.max(0.001, this.#prePauseBpm * curve); 
+              } else {
+                  // Fin du freinage, on passe en pause figée
+                  this.#pauseState = 'PAUSED';
+                  this.#pauseStartTime = now;
+                  
+                  // Tirage au sort de la durée de la pause
+                  const dParam = this.parameters['pause-duration'];
+                  const minD = parseFloat(Array.isArray(dParam) ? dParam[0] : dParam) || 0;
+                  const maxD = parseFloat(Array.isArray(dParam) && dParam[1] !== undefined ? dParam[1] : minD) || 0;
+                  
+                  this.#pauseDurationMs = Ayva.map(Math.random(), 0, 1, minD, maxD) * 1000;
+                  this.$emit('update-current-behavior', `Paused (${(this.#pauseDurationMs/1000).toFixed(1)}s)`);
+                  
+                  return 0.001; 
+              }
+          }
+
+          // C) LA PAUSE FIGÉE
+          if (this.#pauseState === 'PAUSED') {
+              const elapsed = now - this.#pauseStartTime;
+              if (elapsed < this.#pauseDurationMs) {
+                  return 0.001; // Reste gelé
+              } else {
+                  // Fin de la pause, on prépare l'accélération
+                  this.#pauseState = 'ACCELERATING';
+                  this.#pauseStartTime = now;
+                  
+                  this.$emit('update-current-behavior', 'Resuming...');
+                  
+                  // On tire et on force la nouvelle vitesse cible du robot
+                  const newBpm = this.#generateNextBpm();
+                  this.bpmSliderState.value = newBpm;
+                  this.bpmSliderState.updated = true;
+                  this.$emit('update-bpm', newBpm);
+                  this.#bpm = newBpm; // Met à jour targetBpm indirectement
+                  
+                  return 0.001; 
+              }
+          }
+
+          // D) L'ACCÉLÉRATION
+          if (this.#pauseState === 'ACCELERATING') {
+              const elapsed = now - this.#pauseStartTime;
+              if (elapsed < 1000) {
+                  // Pendant 1 seconde, on accélère
+                  const progress = elapsed / 1000;
+                  // Courbe exponentielle douce (Sinus : monte de 0 à 1)
+                  const curve = Math.sin(progress * (Math.PI / 2));
+                  
+                  // On renvoie un BPM qui monte vers la nouvelle cible
+                  return Math.max(0.001, targetBpm * curve);
+              } else {
+                  // On a atteint la vitesse max, on remet tout à zéro
+                  this.#pauseState = 'NONE';
+                  this.#scheduleNextPause();
+                  
+                  // Restaure le nom du mouvement en cours
+                  this.$emit('update-current-behavior', this.#currentStrokeNameStr);
+                  return targetBpm;
+              }
+          }
+      }
+
+      return targetBpm;
     };
 
     return bpmProvider;
