@@ -15,6 +15,20 @@ const STATE = {
 
 const scriptGlobals = {};
 
+/**
+ * Maps every "max-<axis>" parameter to the TempestStroke key(s) it limits. The
+ * stroke axis keeps the historical "max-amplitude" name so existing saved
+ * values (and scripts) keep working.
+ */
+const AMPLITUDE_AXES = [
+  { keys: ['L0', 'stroke'], parameter: 'max-amplitude', fallbackToConfig: true },
+  { keys: ['L1', 'surge'], parameter: 'max-surge' },
+  { keys: ['L2', 'sway'], parameter: 'max-sway' },
+  { keys: ['R0', 'twist'], parameter: 'max-twist' },
+  { keys: ['R1', 'roll'], parameter: 'max-roll' },
+  { keys: ['R2', 'pitch'], parameter: 'max-pitch' },
+];
+
 class Controller extends GeneratorBehavior {
   #customBehaviorStorage = new CustomBehaviorStorage();
 
@@ -211,68 +225,77 @@ class Controller extends GeneratorBehavior {
   // --------------------------------------------------------------------------
   // LOGIQUE WANDERING / AMPLITUDE
   // --------------------------------------------------------------------------
-  #applyAmplitudeLimit(strokeConfig) {
-    let param = this.parameters['max-amplitude'];
-    if (param === undefined || param === null) param = 100; 
+  #applyAmplitudeLimit (strokeConfig) {
+    const newConfig = _.cloneDeep(strokeConfig);
+
+    AMPLITUDE_AXES.forEach((axis) => {
+      this.#applyAxisAmplitudeLimit(newConfig, axis);
+    });
+
+    return newConfig;
+  }
+
+  /**
+   * Limit a single axis' travel to maxAmp (a fraction of its full range) and
+   * let its center wander randomly from the previous stroke. This is the
+   * historical Max Amplitude behaviour, now shared by every axis.
+   */
+  #applyAxisAmplitudeLimit (config, { keys, parameter, fallbackToConfig }) {
+    let param = this.parameters[parameter];
+    if (param === undefined || param === null) param = 100;
 
     let rawValue = Array.isArray(param) ? param[0] : param;
     rawValue = Number(rawValue);
 
-    if (isNaN(rawValue)) return strokeConfig;
+    if (isNaN(rawValue)) return;
 
     const maxAmp = rawValue / 100;
-    if (maxAmp >= 1) return strokeConfig;
+    if (maxAmp >= 1) return;
 
-    const newConfig = _.cloneDeep(strokeConfig);
+    const targetObject = this.#findAxisObject(config, keys, fallbackToConfig);
 
-    let targetObject = null;
-    if (newConfig.L0 && typeof newConfig.L0 === 'object' && newConfig.L0.from !== undefined) {
-        targetObject = newConfig.L0;
-    } else if (newConfig.stroke && typeof newConfig.stroke === 'object' && newConfig.stroke.from !== undefined) {
-        targetObject = newConfig.stroke;
-    } else {
-        targetObject = newConfig;
-    }
-    
-    if (targetObject.from === undefined || targetObject.to === undefined) {
-        return strokeConfig;
+    if (!targetObject || targetObject.from === undefined || targetObject.to === undefined) {
+      return;
     }
 
     const targetFrom = targetObject.from;
     const targetTo = targetObject.to;
 
     let lastCenter = 0.5;
-    if (this.#lastStrokeConfig) {
-        let lastObject = null;
-        if (this.#lastStrokeConfig.L0 && this.#lastStrokeConfig.L0.from !== undefined) lastObject = this.#lastStrokeConfig.L0;
-        else if (this.#lastStrokeConfig.stroke && this.#lastStrokeConfig.stroke.from !== undefined) lastObject = this.#lastStrokeConfig.stroke;
-        else lastObject = this.#lastStrokeConfig;
-        
-        if (lastObject && lastObject.from !== undefined) {
-             lastCenter = (lastObject.from + lastObject.to) / 2;
-        }
+    const lastObject = this.#findAxisObject(this.#lastStrokeConfig, keys, fallbackToConfig);
+
+    if (lastObject && lastObject.from !== undefined) {
+      lastCenter = (lastObject.from + lastObject.to) / 2;
     }
 
-    let targetCenter = (targetFrom + targetTo) / 2;
     const targetHeight = Math.abs(targetTo - targetFrom);
-    
-    const randomDirection = (Math.random() * 2) - 1; 
+
+    const randomDirection = (Math.random() * 2) - 1;
     const drift = randomDirection * maxAmp;
-    
+
     let newCenter = lastCenter + drift;
 
     const allowedHeight = Math.min(targetHeight, maxAmp);
     const radius = allowedHeight / 2;
-    
+
     newCenter = clamp(newCenter, radius, 1 - radius);
 
-    const newFrom = newCenter - radius;
-    const newTo = newCenter + radius;
+    targetObject.from = newCenter - radius;
+    targetObject.to = newCenter + radius;
+  }
 
-    targetObject.from = newFrom;
-    targetObject.to = newTo;
+  /**
+   * Find the config object for one axis (e.g. L0 / "stroke") inside a stroke
+   * config, falling back to the config itself for bare single axis configs.
+   */
+  #findAxisObject (config, keys, fallbackToConfig = false) {
+    if (!config) return null;
 
-    return newConfig;
+    const key = keys.find((name) => config[name]?.from !== undefined);
+
+    if (key !== undefined) return config[key];
+
+    return fallbackToConfig ? config : null;
   }
 
   #isScriptAndComplete () {

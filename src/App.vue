@@ -24,6 +24,7 @@
       :style="hudStyle"
       :mode="mode"
       @update-limits="updateLimits"
+      @update-parameters="updateParameters"
       @request-connection="requestConnection"
       @disconnect="disconnect"
     />

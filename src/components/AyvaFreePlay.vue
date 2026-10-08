@@ -30,18 +30,6 @@
           />
         </div>
         
-        <div class="limit">
-          <div class="axis">
-            Max Amplitude
-          </div>
-          <ayva-slider
-            ref="amplitudeSlider"
-            :options="amplitudeOptions"
-            storage-key="free-play-max-amplitude"
-            @update="onUpdate('max-amplitude', $event)"
-          />
-        </div>
-
         <!-- PAUSE INTERVAL (0 - 120s) -->
         <div class="limit">
           <div class="axis">
@@ -311,11 +299,6 @@ export default {
         step: 1,
         format: formatter(),
       },
-      amplitudeOptions: {
-        range: { min: 10, max: 100 },
-        start: [100],
-        step: 1,
-      },
       pauseIntervalOptions: {
         range: { min: 0, max: 120 },
         start: [0, 0], // Par défaut: 0 = pas de pause
@@ -470,11 +453,9 @@ export default {
 
     // FORCE L'ENVOI DES VALEURS PAR DEFAUT AU CONTROLEUR
     setTimeout(() => {
-        this.fireUpdateParameter('max-amplitude', [100]); 
         this.fireUpdateParameter('pause-interval', [0, 0]); 
         this.fireUpdateParameter('pause-duration', [0, 0]); 
         
-        if (this.$refs.amplitudeSlider) this.fireUpdateParameter('max-amplitude', this.$refs.amplitudeSlider.get());
         if (this.$refs.pauseIntervalSlider) this.fireUpdateParameter('pause-interval', this.$refs.pauseIntervalSlider.get());
         if (this.$refs.pauseDurationSlider) this.fireUpdateParameter('pause-duration', this.$refs.pauseDurationSlider.get());
     }, 1000);

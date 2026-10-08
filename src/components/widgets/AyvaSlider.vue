@@ -79,11 +79,10 @@ export default {
 
     modelValue (newValue) {
       if (!_.isEqual(newValue, this.value)) {
-        if (newValue.length) {
-          this.slider.set(...newValue);
-        } else {
-          this.slider.set(newValue);
-        }
+        // noUiSlider's signature is set(value, fireSetEvent, exactInput): a
+        // single value for one handle, an array for several. Spreading the
+        // array would pass the second handle as `fireSetEvent`.
+        this.slider.set(newValue);
       }
     },
   },
