@@ -23,6 +23,13 @@
           <div class="axis">
             {{ axis }}
           </div>
+          <!-- Gates whether the master "ALL" slider also drives this axis. -->
+          <div class="checkbox">
+            <ayva-checkbox
+              v-model="allLimitsEnabled[axis]"
+              :storage-key="allLimitsStorageKey(axis)"
+            />
+          </div>
           <ayva-slider
             :options="sliderOptions"
             :model-value="limitValues[axis]"
@@ -31,6 +38,13 @@
           />
           <div class="axis max-axis">
             {{ maxLabel(axis) }}
+          </div>
+          <!-- Gates whether the master "max all" slider also drives this axis. -->
+          <div class="checkbox">
+            <ayva-checkbox
+              v-model="allMaxEnabled[axis]"
+              :storage-key="allMaxStorageKey(axis)"
+            />
           </div>
           <ayva-slider
             :options="maxSliderOptions"
@@ -46,12 +60,19 @@
         <div class="axis">
           ALL
         </div>
+        <!-- Checked when every axis is enabled: toggles the whole column. -->
+        <div class="checkbox">
+          <ayva-checkbox v-model="allLimitsChecked" />
+        </div>
         <ayva-slider
           :options="sliderOptions"
           @update="onAllLimitsUpdate"
         />
         <div class="axis max-axis">
           max all
+        </div>
+        <div class="checkbox">
+          <ayva-checkbox v-model="allMaxChecked" />
         </div>
         <ayva-slider
           :options="maxSliderOptions"
@@ -68,6 +89,7 @@
 
 <script>
 import AyvaSlider from './widgets/AyvaSlider.vue';
+import AyvaCheckbox from './widgets/AyvaCheckbox.vue';
 import AyvaConnected from './AyvaConnected.vue';
 import AyvaSettings from './AyvaSettings.vue';
 import AyvaModal from './AyvaModal.vue';
@@ -90,9 +112,20 @@ const MAX_PARAMETERS = {
   pitch: 'max-pitch',
 };
 
+/** Every axis of the Output panel, in display order. */
+const AXES = ['stroke', 'surge', 'sway', 'twist', 'roll', 'pitch'];
+
+/** Builds the per-axis map that tells whether a master slider drives an axis. */
+const everyAxisEnabled = (enabled) => AXES.reduce((map, axis) => {
+  map[axis] = enabled;
+
+  return map;
+}, {});
+
 export default {
   components: {
     AyvaSlider,
+    AyvaCheckbox,
     AyvaConnected,
     AyvaSettings,
     AyvaModal,
@@ -115,7 +148,7 @@ export default {
 
   data () {
     return {
-      axes: ['stroke', 'surge', 'sway', 'twist', 'roll', 'pitch'],
+      axes: AXES,
       sliderOptions: {
         start: [0.2, 0.8],
         tooltips: true,
@@ -136,8 +169,40 @@ export default {
       // the master sliders can move them all at once.
       limitValues: {},
       maxValues: {},
+      // Checkbox per axis: when unchecked, the matching master slider leaves
+      // that axis alone. Checked by default, persisted like the sliders.
+      allLimitsEnabled: everyAxisEnabled(true),
+      allMaxEnabled: everyAxisEnabled(true),
       showSettings: false,
     };
+  },
+
+  computed: {
+    /*
+     * Checkboxes of the master row: checked while every axis is enabled. Toggling
+     * them flips the whole column at once.
+     */
+    allLimitsChecked: {
+      get () {
+        return this.axes.every((axis) => this.allLimitsEnabled[axis]);
+      },
+      set (checked) {
+        this.axes.forEach((axis) => {
+          this.allLimitsEnabled[axis] = checked;
+        });
+      },
+    },
+
+    allMaxChecked: {
+      get () {
+        return this.axes.every((axis) => this.allMaxEnabled[axis]);
+      },
+      set (checked) {
+        this.axes.forEach((axis) => {
+          this.allMaxEnabled[axis] = checked;
+        });
+      },
+    },
   },
 
   mounted () {
@@ -162,6 +227,14 @@ export default {
 
     maxStorageKey (axis) {
       return `free-play-${MAX_PARAMETERS[axis]}`;
+    },
+
+    allLimitsStorageKey (axis) {
+      return `all-limits-${axis}`;
+    },
+
+    allMaxStorageKey (axis) {
+      return `all-max-${axis}`;
     },
 
     onMaxUpdate (axis, values) {
@@ -194,6 +267,11 @@ export default {
       const [min, max] = values.map((value) => Number(value));
 
       this.axes.forEach((axis) => {
+        // Unchecked axes keep their own limits.
+        if (!this.allLimitsEnabled[axis]) {
+          return;
+        }
+
         this.limitValues[axis] = [min, max];
       });
     },
@@ -202,6 +280,11 @@ export default {
       const value = Number(Array.isArray(values) ? values[0] : values);
 
       this.axes.forEach((axis) => {
+        // Unchecked axes keep their own max value.
+        if (!this.allMaxEnabled[axis]) {
+          return;
+        }
+
         this.maxValues[axis] = value;
       });
     },
@@ -235,12 +318,19 @@ export default {
 }
 
 /*
- * Each axis row now holds four columns: the axis name, its limit slider, the
- * matching "max" label and its max slider.
+ * Each axis row now holds six columns: the axis name, the checkbox that lets
+ * the master "ALL" slider drive it, its limit slider, the matching "max"
+ * label, the checkbox for the "max all" slider and the max slider.
  */
 .limit {
-  grid-template-columns: 76px 162px 96px minmax(0, 1fr);
+  grid-template-columns: 76px 20px 162px 96px 20px minmax(0, 1fr);
   column-gap: 10px;
+}
+
+.limit .checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .all-limits {
