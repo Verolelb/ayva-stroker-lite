@@ -66,6 +66,7 @@
         </div>
         <ayva-slider
           :options="sliderOptions"
+          storage-key="all-limits"
           @update="onAllLimitsUpdate"
         />
         <div class="axis max-axis">
@@ -76,6 +77,7 @@
         </div>
         <ayva-slider
           :options="maxSliderOptions"
+          storage-key="max-all"
           @update="onAllMaxUpdate"
         />
       </div>
@@ -173,6 +175,13 @@ export default {
       // that axis alone. Checked by default, persisted like the sliders.
       allLimitsEnabled: everyAxisEnabled(true),
       allMaxEnabled: everyAxisEnabled(true),
+      /*
+       * While the sliders replay their stored value the matching "update" must
+       * not be taken for a user move: the two master sliders restore their own
+       * value on open, and applying it would overwrite the six per-axis ones.
+       * Cleared at the end of mounted(), once every slider has restored itself.
+       */
+      restoring: true,
       showSettings: false,
     };
   },
@@ -214,6 +223,10 @@ export default {
       const stored = sliderStorage.load(this.maxStorageKey(axis));
       this.onMaxUpdate(axis, stored ?? this.maxSliderOptions.start);
     });
+
+    // Children are mounted before their parent, so every slider has replayed
+    // its stored value by now: from here on an update comes from the user.
+    this.restoring = false;
   },
 
   methods: {
@@ -264,6 +277,11 @@ export default {
      * handles at once and each of them emits its usual update event.
      */
     onAllLimitsUpdate (values) {
+      // Replayed a stored value instead of a real drag.
+      if (this.restoring) {
+        return;
+      }
+
       const [min, max] = values.map((value) => Number(value));
 
       this.axes.forEach((axis) => {
@@ -277,6 +295,11 @@ export default {
     },
 
     onAllMaxUpdate (values) {
+      // Replayed a stored value instead of a real drag.
+      if (this.restoring) {
+        return;
+      }
+
       const value = Number(Array.isArray(values) ? values[0] : values);
 
       this.axes.forEach((axis) => {

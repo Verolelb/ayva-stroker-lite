@@ -49,6 +49,10 @@ scripts reading `parameters.maxAmplitude` keep working.
 - The built-in TempestStroke library, plus custom strokes and AyvaScript behaviors.
 - Manual mode: trigger any stroke directly from the Strokes panel.
 
+### Browser support
+
+Tested and working well with **Microsoft Edge**.
+
 ## Project Setup
 
 ```sh
