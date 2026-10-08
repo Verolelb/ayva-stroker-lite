@@ -11,6 +11,8 @@ step-by-step guide can be found
 
 ### Output panel
 
+![Output panel: one limit slider and one max slider per axis, plus the ALL and max all master sliders](docs/output-panel.png)
+
 Every axis (stroke, surge, sway, twist, roll, pitch) is controlled by two sliders:
 
 - an **axis limit** slider (two handles) that clamps the axis' travel. The limits are
@@ -19,6 +21,15 @@ Every axis (stroke, surge, sway, twist, roll, pitch) is controlled by two slider
   allowed to use during free play. Exactly like the original Max Amplitude, the center of
   the motion also drifts randomly from one stroke to the next, so free play keeps moving
   around instead of repeating the same window forever.
+
+Each axis also carries two checkboxes, one in front of each of its sliders:
+
+- the left one decides whether the **ALL** slider drives that axis;
+- the right one decides whether **max all** drives it.
+
+An unchecked axis keeps its own values when a master slider moves. The two checkboxes on
+the `ALL` row tick or untick their whole column at once. Everything starts ticked and is
+remembered between sessions.
 
 Two master sliders push one value to every axis at once:
 
